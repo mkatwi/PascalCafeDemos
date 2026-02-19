@@ -8,7 +8,8 @@ uses
   {$ENDIF}
   Interfaces, // this includes the LCL widgetset
   Forms,
-  mainclientgui
+  mainclientgui,
+  restapiclient
   { you can add units after this };
 
 {$R *.res}

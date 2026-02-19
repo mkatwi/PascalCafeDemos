@@ -9,6 +9,8 @@ uses
   Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Types,
   Dialogs, StdCtrls, Grids, Menus, ComCtrls, ExtCtrls, Buttons,
   LCLIntf,
+  mormot.core.base,
+  servicesshared,
   databaseinfra,
   documentdom,
   productdom;
@@ -38,6 +40,7 @@ type
     btnConnectLocal: TButton;
     btnAddProduct: TButton;
     btnConnectRemote: TButton;
+    btnConnectRestApi: TButton;
     DetailImage2: TImage;
     DetailImage3: TImage;
     DetailImage4: TImage;
@@ -66,6 +69,7 @@ type
     tsOverview: TTabSheet;
     tsImages: TTabSheet;
     procedure btnAddProductClick(Sender: TObject);
+    procedure btnConnectRestApiClick(Sender: TObject);
     procedure FieldEditingDone(Sender: TObject);
     procedure ProductDrawGridHeaderClick(Sender: TObject; IsColumn: Boolean;
       Index: Integer);
@@ -553,6 +557,50 @@ begin
     end;
   finally
     TButton(Sender).Enabled:=True;
+  end;
+end;
+
+procedure TForm1.btnConnectRestApiClick(Sender: TObject);
+var
+  ServerOk: boolean;
+  HostAddress: string;
+begin
+  ServerOk := SharedmORMotData.Connected;
+  if ServerOk then
+  begin
+    ShowMessage('Already connected !');
+    exit;
+  end;
+
+  // Prompt user for server address
+  HostAddress := 'localhost';
+  if not InputQuery('REST API Connection', 'Enter server address:', HostAddress) then
+    exit;
+
+  btnConnectRestApi.Enabled := False;
+  try
+    SharedmORMotData.ConnectRestApi(RawUTF8(HostAddress), HTTP_PORT);
+
+    ServerOk := SharedmORMotData.Connected;
+    if (NOT ServerOk) then
+    begin
+      ShowMessage('Could not connect to REST API at ' + HostAddress + ':' + string(HTTP_PORT));
+    end
+    else
+    begin
+      // Get the Products from the REST API
+      SharedmORMotData.GetProductTable(Products);
+
+      // Show them !!
+      ProductDrawGrid.RowCount := Products.Count + 1;
+      ProductDrawGrid.Show;
+      ProductDrawGrid.Invalidate;
+
+      // Select first available sample, if any
+      if Products.Count > 0 then GetDataFromGridRow(ProductDrawGrid, 1);
+    end;
+  finally
+    btnConnectRestApi.Enabled := True;
   end;
 end;
 

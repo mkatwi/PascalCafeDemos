@@ -14,7 +14,8 @@ uses
   productserviceinterface,
   documentserviceinterface,
   productdom,
-  documentdom;
+  documentdom,
+  restapiclient;
 
 type
   TSharedmORMotDDD = class(TObject)
@@ -22,6 +23,8 @@ type
     FConnected         : boolean;
     fDS                : IDocumentService;
     fPS                : IProductService;
+    fRestApi           : TRestApiConnector;
+    fUseRestApi        : boolean;
     DataBaseConnection : TObject;
     DataBaseServer     : TObject;
   public
@@ -29,6 +32,7 @@ type
     destructor Destroy;override;
 
     procedure ConnectNew(remote:boolean; ownserver:boolean);
+    procedure ConnectRestApi(const aHost: RawUTF8; const aPort: RawUTF8);
     procedure DisConnect;
 
     function  GetProductTable(var Products:TProductCollection):boolean;
@@ -49,6 +53,8 @@ type
     property Connected         : boolean read FConnected;
     property DocumentService   : IDocumentService read fDS;
     property ProductService    : IProductService read fPS;
+    property RestApiConnector  : TRestApiConnector read fRestApi;
+    property UsingRestApi      : boolean read fUseRestApi;
   end;
 
 
@@ -56,12 +62,17 @@ implementation
 
 uses
   server,
-  client;
+  client,
+  mormot.core.base,
+  mormot.core.json,
+  mormot.core.variants;
 
 constructor TSharedmORMotDDD.Create;
 begin
   DataBaseConnection := nil;
   DataBaseServer := nil;
+  fRestApi := nil;
+  fUseRestApi := false;
   inherited Create;
 end;
 
@@ -124,10 +135,33 @@ begin
   if (NOT fConnected) then DisConnect;
 end;
 
+procedure TSharedmORMotDDD.ConnectRestApi(const aHost: RawUTF8; const aPort: RawUTF8);
+begin
+  if (NOT fConnected) then
+  begin
+    fUseRestApi := true;
+    try
+      fRestApi := TRestApiConnector.Create(aHost, aPort);
+      fConnected := fRestApi.Connect;
+    except
+      fConnected := false;
+    end;
+
+    if (NOT fConnected) then DisConnect;
+  end;
+end;
+
 procedure TSharedmORMotDDD.DisConnect;
 begin
   fDS:=nil;
   fPS:=nil;
+
+  if Assigned(fRestApi) then
+  begin
+    fRestApi.Free;
+    fRestApi:=nil;
+  end;
+  fUseRestApi := false;
 
   if Assigned(DataBaseConnection) then
   begin
@@ -150,53 +184,132 @@ begin
   if (NOT fConnected) then exit;
   if Assigned(Products) then
   begin
-    result:=(ProductService.GetAllProducts(Products) = seSuccess);
+    if fUseRestApi then
+      result := fRestApi.GetAllProducts(Products)
+    else
+      result:=(ProductService.GetAllProducts(Products) = seSuccess);
   end;
 end;
 
 function TSharedmORMotDDD.GetProduct(var Product: TProduct):boolean;
+var
+  FetchedProduct: TProduct;
 begin
   result:=false;
   if (NOT fConnected) then exit;
-  result:=(ProductService.GetProduct(Product) = seSuccess);
+  if fUseRestApi then
+  begin
+    if fRestApi.GetProductByCode(Product.ProductCode, FetchedProduct) then
+    begin
+      Product.Brand := FetchedProduct.Brand;
+      Product.Model := FetchedProduct.Model;
+      Product.Thumb := FetchedProduct.Thumb;
+      Product.Version := FetchedProduct.Version;
+      FetchedProduct.Free;
+      result := true;
+    end;
+  end
+  else
+    result:=(ProductService.GetProduct(Product) = seSuccess);
 end;
 
 function TSharedmORMotDDD.AddProduct(const Product: TProduct):boolean;
+var
+  Response: RawUtf8;
+  Body: RawUtf8;
 begin
   result:=false;
   if (NOT fConnected) then exit;
-  result:=(ProductService.AddProduct(Product) = seSuccess);
+  if fUseRestApi then
+  begin
+    // POST product data as JSON to the REST API
+    Body := JsonEncode(['ProductCode', Product.ProductCode,
+                        'Brand', Product.Brand,
+                        'Model', Product.Model]);
+    result := (fRestApi.Post('/root/ProductService.AddProduct', Body, Response) = 200);
+  end
+  else
+    result:=(ProductService.AddProduct(Product) = seSuccess);
 end;
 
 function TSharedmORMotDDD.UpdateProductCode(const Product: TProduct; const NewCode:RawUTF8):boolean;
+var
+  Response: RawUtf8;
+  Body: RawUtf8;
 begin
   result:=false;
   if (NOT fConnected) then exit;
-  result:=(ProductService.UpdateProductCode(Product.Code,NewCode) = seSuccess);
+  if fUseRestApi then
+  begin
+    Body := JsonEncode(['aProductCode', Product.Code, 'NewCode', NewCode]);
+    result := (fRestApi.Post('/root/ProductService.UpdateProductCode', Body, Response) = 200);
+  end
+  else
+    result:=(ProductService.UpdateProductCode(Product.Code,NewCode) = seSuccess);
 end;
 
 function TSharedmORMotDDD.UpdateProduct(const Product: TProduct; const FieldInfo:RawUTF8):boolean;
 var
   TD           : variant;
+  Response: RawUtf8;
+  Body: RawUtf8;
 begin
   result:=false;
   if (NOT fConnected) then exit;
-  if ProductFieldsToVariant(Product,FieldInfo,TD) then
-    result:=(ProductService.UpdateProduct(Product.Code,TD) = seSuccess);
+  if fUseRestApi then
+  begin
+    if ProductFieldsToVariant(Product,FieldInfo,TD) then
+    begin
+      Body := JsonEncode(['aProductCode', Product.Code, 'FieldData', TD]);
+      result := (fRestApi.Post('/root/ProductService.UpdateProduct', Body, Response) = 200);
+    end;
+  end
+  else
+  begin
+    if ProductFieldsToVariant(Product,FieldInfo,TD) then
+      result:=(ProductService.UpdateProduct(Product.Code,TD) = seSuccess);
+  end;
 end;
 
 function TSharedmORMotDDD.DeleteProduct(const Product: TProduct):boolean;
+var
+  Response: RawUtf8;
+  Body: RawUtf8;
 begin
   result:=false;
   if (NOT fConnected) then exit;
-  result:=(ProductService.DeleteProduct(Product.ProductCode) = seSuccess);
+  if fUseRestApi then
+  begin
+    Body := JsonEncode(['aProductCode', Product.ProductCode]);
+    result := (fRestApi.Post('/root/ProductService.DeleteProduct', Body, Response) = 200);
+  end
+  else
+    result:=(ProductService.DeleteProduct(Product.ProductCode) = seSuccess);
 end;
 
 function TSharedmORMotDDD.ChangedProduct(const Product: TProduct; out Changed:boolean):boolean;
+var
+  Response: RawUtf8;
+  Body: RawUtf8;
+  Doc: TDocVariantData;
 begin
   result:=false;
+  Changed:=false;
   if (NOT fConnected) then exit;
-  result:=(ProductService.ChangedProduct(Product.ProductCode,Product.Version,Changed) = seSuccess);
+  if fUseRestApi then
+  begin
+    Body := JsonEncode(['aProductCode', Product.ProductCode,
+                        'aVersion', Product.Version]);
+    if (fRestApi.Post('/root/ProductService.ChangedProduct', Body, Response) = 200) then
+    begin
+      Doc.InitJson(Response, JSON_FAST);
+      if Doc.GetValueIndex('Changed') >= 0 then
+        Changed := Doc.B['Changed'];
+      result := true;
+    end;
+  end
+  else
+    result:=(ProductService.ChangedProduct(Product.ProductCode,Product.Version,Changed) = seSuccess);
 end;
 
 function TSharedmORMotDDD.GetDocuments(const Product: TProduct; var ADocuments: TDocumentCollection):boolean;
@@ -206,6 +319,8 @@ var
 begin
   result:=false;
   if (NOT fConnected) then exit;
+  if fUseRestApi then
+    exit; // Document retrieval not yet supported via REST API
   if Assigned(ADocuments) then
   begin
     for TCollectionItem(ProductDocumentRunner) in Product.Documents do
@@ -222,6 +337,8 @@ function TSharedmORMotDDD.GetDocument(const AProductDocument: TProductDocument; 
 begin
   result:=false;
   if (NOT fConnected) then exit;
+  if fUseRestApi then
+    exit; // Document retrieval not yet supported via REST API
   if Assigned(ADocument) then
   begin
     // Get the document if any
@@ -235,6 +352,8 @@ var
 begin
   result:=false;
   if (NOT fConnected) then exit;
+  if fUseRestApi then
+    exit; // Document thumb retrieval not yet supported via REST API
   if Assigned(AProductDocument) then
   begin
     Document:=TDocument.Create(nil);
@@ -256,6 +375,8 @@ var
 begin
   result:=false;
   if (NOT fConnected) then exit;
+  if fUseRestApi then
+    exit; // Document upload not yet supported via REST API
   if Assigned(AProductDocument) then
   begin
     LocalProduct:=AProductDocument.GetOwner;
