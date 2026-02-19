@@ -1,7 +1,5 @@
 unit restapiclient;
 
-{$mode objfpc}{$H+}
-
 {$I mormot.defines.inc}
 {$I globaldefines.inc}
 
@@ -150,14 +148,14 @@ begin
   aResponse := '';
   Client := TSimpleHttpClient.Create;
   try
-    Client.TimeOut := 10000; // 10 second timeout
+    Client.Options^.CreateTimeoutMS := 10000; // 10 second connection timeout
     Url := BuildUrl(aPath);
     Header := '';
     {$ifdef USE_JWT}
     Header := 'Authorization: Bearer ' + fJwtToken + #13#10;
     {$endif}
-    aResponse := Client.Request(Url, HTTP_METHOD_TEXT[aMethod], Header, aBody);
-    Result := Client.Status;
+    Result := Client.Request(Url, HTTP_METHOD_TEXT[aMethod], Header, aBody);
+    aResponse := Client.Body;
   finally
     Client.Free;
   end;
